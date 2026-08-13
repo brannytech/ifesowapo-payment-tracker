@@ -955,17 +955,7 @@
     document.getElementById('stat-bar-pct').textContent =
       percent !== null ? formatPercent(percent) : '-- % collected';
 
-    /* Temporary diagnostics — shows exactly which method supplied the
-       Target value, so any future mismatch can be read straight off
-       the page. Safe to remove once confirmed correct. */
-    var dbg = document.getElementById('debug-line');
-    if(dbg){
-      dbg.textContent =
-        'Debug — from sheet header: ' + (headerTarget !== null ? headerTarget : 'not found') +
-        ' | from summing house rows (exact): ' + (computedTarget !== null ? computedTarget : 'not used') +
-        ' | percent used: ' + (percent !== null ? percent : 'none') +
-        ' | collected used: ' + (collected !== null ? collected : 'none');
-    }
+
   }
 
   function fetchWithTimeout(url){
