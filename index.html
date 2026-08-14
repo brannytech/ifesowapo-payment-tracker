@@ -525,9 +525,9 @@
 
 <div class="meeting-banner">
   <div class="wrap inner">
-    <span class="label">📅 Next General Meeting:</span>
-    <span class="when">29th August 2026 · 7:00 AM</span>
-    <span class="sep">·</span>
+    <span class="label" id="banner-label">📅 Next General Meeting:</span>
+    <span class="when" id="banner-when">calculating…</span>
+    <span class="sep" id="banner-sep">·</span>
     <span class="mini-countdown" id="banner-countdown">calculating…</span>
   </div>
 </div>
@@ -685,12 +685,92 @@
     '19nJyE3duKMNCQxXiULjxiv3QSLxsi6b4vrGpJX7TUAU';
   var SHEET_GID = '0';
 
-  var MEETING_TARGET = new Date('2026-08-29T07:00:00');
+  /*
+    Meeting schedule rule: every month has exactly two General
+    Meetings — the 2nd Saturday and the LAST Saturday of that month
+    (whether the 4th or 5th one). Using "last Saturday" directly
+    means a 5-Saturday month is handled automatically, no special
+    case needed. Each meeting runs 7:00 AM - 8:00 AM.
+  */
+  var MEETING_START_HOUR = 7;
+  var MEETING_END_HOUR = 8;
+
   var PAYMENT_TARGET = new Date('2026-08-21T23:59:59');
   var REFRESH_INTERVAL_MS = 60 * 1000;
   var FETCH_TIMEOUT_MS = 15000;
   var refreshSecondsLeft = 60;
   var lastSyncTime = null;
+
+  function getSaturdaysInMonth(year, month){
+    var dates = [];
+    var d = new Date(year, month, 1);
+    while(d.getDay() !== 6){ d.setDate(d.getDate() + 1); }
+    while(d.getMonth() === month){
+      dates.push(new Date(d));
+      d.setDate(d.getDate() + 7);
+    }
+    return dates;
+  }
+
+  function getMeetingDaysInMonth(year, month){
+    var saturdays = getSaturdaysInMonth(year, month);
+    var second = saturdays[1];
+    var last = saturdays[saturdays.length - 1];
+    // In the rare case a month somehow only has one Saturday-based
+    // entry (never happens with real calendars, but guard anyway):
+    if(!second) return [last];
+    return [second, last];
+  }
+
+  // Returns { start, end } Date pairs for every meeting across a
+  // window of months starting from the given year/month.
+  function getMeetingWindows(fromYear, fromMonth, monthsAhead){
+    var windows = [];
+    for(var i = 0; i <= monthsAhead; i++){
+      var m = fromMonth + i;
+      var y = fromYear + Math.floor(m / 12);
+      var mm = ((m % 12) + 12) % 12;
+      getMeetingDaysInMonth(y, mm).forEach(function(day){
+        var start = new Date(day.getFullYear(), day.getMonth(), day.getDate(), MEETING_START_HOUR, 0, 0);
+        var end = new Date(day.getFullYear(), day.getMonth(), day.getDate(), MEETING_END_HOUR, 0, 0);
+        windows.push({ start: start, end: end });
+      });
+    }
+    windows.sort(function(a, b){ return a.start - b.start; });
+    return windows;
+  }
+
+  // Central function: tells us whether a meeting is happening right
+  // now, or when the next one starts.
+  function getMeetingStatus(now){
+    var windows = getMeetingWindows(now.getFullYear(), now.getMonth(), 2);
+
+    for(var i = 0; i < windows.length; i++){
+      if(now >= windows[i].start && now < windows[i].end){
+        return { live: true, meeting: windows[i] };
+      }
+    }
+
+    for(var j = 0; j < windows.length; j++){
+      if(windows[j].start > now){
+        return { live: false, meeting: windows[j] };
+      }
+    }
+
+    return null; // should not happen given the 2-month lookahead
+  }
+
+  function formatMeetingDate(d){
+    var day = d.getDate();
+    var suffix = 'th';
+    if(day % 10 === 1 && day !== 11) suffix = 'st';
+    else if(day % 10 === 2 && day !== 12) suffix = 'nd';
+    else if(day % 10 === 3 && day !== 13) suffix = 'rd';
+    var month = d.toLocaleDateString('en-GB', { month: 'long' });
+    return day + suffix + ' ' + month + ' ' + d.getFullYear();
+  }
+
+  function pad(n){ return String(n).padStart(2, '0'); }
 
   function googleSheetEmbedUrl(){
     return PUBLISHED_SHEET_URL;
@@ -1067,33 +1147,54 @@
     }
   }
 
-  /* Meeting countdown */
-  function pad(n){ return String(n).padStart(2,'0'); }
+  /* Meeting + deadline countdown */
+
+  function updateMeetingBanner(now){
+    var labelEl = document.getElementById('banner-label');
+    var whenEl = document.getElementById('banner-when');
+    var sepEl = document.getElementById('banner-sep');
+    var countdownEl = document.getElementById('banner-countdown');
+
+    var status = getMeetingStatus(now);
+    if(!status) return;
+
+    if(status.live){
+      if(labelEl) labelEl.textContent = '🎉 General Meeting happening now!';
+      if(whenEl) whenEl.textContent = 'Ends 8:00 AM';
+      if(sepEl) sepEl.style.display = 'none';
+      if(countdownEl) countdownEl.style.display = 'none';
+      return;
+    }
+
+    if(labelEl) labelEl.textContent = '📅 Next General Meeting:';
+    if(sepEl) sepEl.style.display = '';
+    if(countdownEl) countdownEl.style.display = '';
+    if(whenEl){
+      whenEl.textContent = formatMeetingDate(status.meeting.start) + ' · 7:00 AM';
+    }
+
+    var diff = status.meeting.start - now;
+    var days = Math.floor(diff/(1000*60*60*24));
+    var hours = Math.floor((diff/(1000*60*60))%24);
+    var mins = Math.floor((diff/(1000*60))%60);
+    var secs = Math.floor((diff/1000)%60);
+    if(countdownEl){
+      countdownEl.textContent =
+        days + 'd ' + pad(hours) + 'h ' +
+        pad(mins) + 'm ' + pad(secs) + 's to go';
+    }
+  }
 
   function tick(){
     var now = new Date();
-    var diff = MEETING_TARGET - now;
+
+    updateMeetingBanner(now);
+
+    // Countdown section: counts down to the Contribution Deadline
     var diff2 = PAYMENT_TARGET - now;
     var activeEl = document.getElementById('countdown-active');
     var doneEl = document.getElementById('countdown-done');
-    var bannerEl = document.getElementById('banner-countdown');
 
-    // Banner: countdown to the next General Meeting
-    if(diff <= 0){
-      if(bannerEl) bannerEl.textContent = 'Happening now';
-    } else {
-      var bDays = Math.floor(diff/(1000*60*60*24));
-      var bHours = Math.floor((diff/(1000*60*60))%24);
-      var bMins = Math.floor((diff/(1000*60))%60);
-      var bSecs = Math.floor((diff/1000)%60);
-      if(bannerEl){
-        bannerEl.textContent =
-          bDays + 'd ' + pad(bHours) + 'h ' +
-          pad(bMins) + 'm ' + pad(bSecs) + 's to go';
-      }
-    }
-
-    // Countdown section: counts down to the Contribution Deadline
     if(diff2 <= 0){
       activeEl.style.display = 'none';
       doneEl.style.display = 'block';
